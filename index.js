@@ -34,11 +34,26 @@ class MusicBot {
             await this.autoJoin();
         });
 
-        this.client.on('voiceStateUpdate', (oldState, newState) => {
-            if (oldState.member.id === this.client.user.id && newState.channelId === null) {
-                if (this.currentChannelId) {
-                    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-                    this.reconnectTimeout = setTimeout(() => this.autoJoin(), 5000);
+        // مراقبة حالة الصوت لإعادة الاتصال وتغيير الاسم
+        this.client.on('voiceStateUpdate', async (oldState, newState) => {
+            // إذا كان البوت هو من تحرك
+            if (oldState.member.id === this.client.user.id) {
+                // في حال الخروج
+                if (newState.channelId === null) {
+                    if (this.currentChannelId) {
+                        if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+                        this.reconnectTimeout = setTimeout(() => this.autoJoin(), 5000);
+                    }
+                    // إعادة الاسم الأصلي عند الخروج (اختياري)
+                    try {
+                        const guild = oldState.guild;
+                        const me = await guild.members.fetch(this.client.user.id);
+                        await me.setNickname(this.config.name);
+                    } catch (e) {}
+                } 
+                // في حال الدخول لروم جديد
+                else if (newState.channelId !== null) {
+                    this.updateNickname(newState.channel);
                 }
             }
         });
@@ -49,11 +64,9 @@ class MusicBot {
             const args = message.content.slice(config.prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            // أوامر الموسيقى لكل بوت (تعمل إذا كان البوت في نفس الروم مع المستخدم)
             if (command === 'play' || command === 'p') {
                 if (!message.member.voice.channel) return message.reply('❌ يجب أن تكون في روم صوتي!');
                 
-                // التأكد أن البوت في نفس الروم أو يدخل إليه
                 if (!this.connection || this.currentChannelId !== message.member.voice.channel.id) {
                     this.currentChannelId = message.member.voice.channel.id;
                     this.joinChannel(this.currentChannelId, message.guild.id, message.guild.voiceAdapterCreator);
@@ -90,13 +103,25 @@ class MusicBot {
                 message.reply(`🤖 **${this.config.name}** is online!`);
             }
 
-            // أوامر البوت القائد
             if (this.isMaster) {
                 this.handleMasterCommands(message, command, args);
             }
         });
 
         this.player.on('error', error => console.error(`[${this.config.name}] Player Error: ${error.message}`));
+    }
+
+    async updateNickname(channel) {
+        if (!channel) return;
+        try {
+            const guild = channel.guild;
+            const me = await guild.members.fetch(this.client.user.id);
+            // تغيير اللقب ليكون نفس اسم الروم
+            await me.setNickname(`🔊 ${channel.name}`);
+            console.log(`[${this.config.name}] Nickname updated to: ${channel.name}`);
+        } catch (err) {
+            console.error(`[${this.config.name}] Failed to update nickname: ${err.message}`);
+        }
     }
 
     async handleMasterCommands(message, command, args) {
@@ -107,7 +132,7 @@ class MusicBot {
             if (targetBot && channel) {
                 targetBot.currentChannelId = channel.id;
                 targetBot.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
-                message.reply(`✅ تم استدعاء **${targetBot.config.name}**`);
+                message.reply(`✅ تم استدعاء **${targetBot.config.name}** إلى **${channel.name}**`);
             }
         }
 
@@ -119,7 +144,6 @@ class MusicBot {
             message.reply('🧹 تم إخراج جميع البوتات.');
         }
         
-        // أمر لتشغيل موسيقى في كل البوتات دفعة واحدة (اختياري)
         if (command === 'playall') {
             const query = args.join(' ');
             if (!query) return message.reply('❌ يرجى كتابة اسم الأغنية!');
@@ -146,6 +170,7 @@ class MusicBot {
                 const channel = await this.client.channels.fetch(this.currentChannelId);
                 if (channel && channel.isVoiceBased()) {
                     this.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
+                    this.updateNickname(channel);
                 }
             } catch (err) {}
         }

@@ -1,0 +1,12 @@
+{
+  "bots": [
+    { "name": "Music Bot 1", "token": "TOKEN_1", "channelId": "CHANNEL_ID_1" },
+    { "name": "Music Bot 2", "token": "TOKEN_2", "channelId": "CHANNEL_ID_2" },
+    { "name": "Music Bot 3", "token": "TOKEN_3", "channelId": "CHANNEL_ID_3" },
+    { "name": "Music Bot 4", "token": "TOKEN_4", "channelId": "CHANNEL_ID_4" },
+    { "name": "Music Bot 5", "token": "TOKEN_5", "channelId": "CHANNEL_ID_5" },
+    { "name": "Music Bot 6", "token": "TOKEN_6", "channelId": "CHANNEL_ID_6" },
+    { "name": "Music Bot 7", "token": "TOKEN_7", "channelId": "CHANNEL_ID_7" }
+  ],
+  "prefix": "!"
+}

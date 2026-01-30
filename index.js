@@ -1,5 +1,6 @@
 const { Client, GatewayIntentBits } = require('discord.js');
-const { joinVoiceChannel, createAudioPlayer, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const { joinVoiceChannel, createAudioPlayer, createAudioResource, AudioPlayerStatus, VoiceConnectionStatus, entersState } = require('@discordjs/voice');
+const play = require('play-dl');
 const config = require('./config.json');
 require('dotenv').config();
 
@@ -10,7 +11,7 @@ class MusicBot {
         this.config = botConfig;
         this.index = index;
         this.isMaster = (index === 0);
-        this.currentChannelId = botConfig.channelId; // تخزين الروم الحالي لإعادة الاتصال به
+        this.currentChannelId = botConfig.channelId;
         this.client = new Client({
             intents: [
                 GatewayIntentBits.Guilds,
@@ -33,18 +34,12 @@ class MusicBot {
             await this.autoJoin();
         });
 
-        // مراقبة حالة الصوت لإعادة الاتصال التلقائي
         this.client.on('voiceStateUpdate', (oldState, newState) => {
-            // إذا كان البوت هو من خرج من الروم
             if (oldState.member.id === this.client.user.id && newState.channelId === null) {
-                console.log(`[${this.config.name}] Disconnected from voice. Reconnecting in 5 seconds...`);
-                
-                // تجنب تكرار محاولات إعادة الاتصال
-                if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
-                
-                this.reconnectTimeout = setTimeout(() => {
-                    this.autoJoin();
-                }, 5000);
+                if (this.currentChannelId) {
+                    if (this.reconnectTimeout) clearTimeout(this.reconnectTimeout);
+                    this.reconnectTimeout = setTimeout(() => this.autoJoin(), 5000);
+                }
             }
         });
 
@@ -54,15 +49,54 @@ class MusicBot {
             const args = message.content.slice(config.prefix.length).trim().split(/ +/);
             const command = args.shift().toLowerCase();
 
-            if (command === 'status') {
-                const status = this.connection ? `Connected to <#${this.currentChannelId}>` : 'Disconnected';
-                message.reply(`🤖 **${this.config.name}** (${this.isMaster ? 'Master' : 'Sub-Bot'}) is online!\nStatus: ${status}`);
+            // أوامر الموسيقى لكل بوت (تعمل إذا كان البوت في نفس الروم مع المستخدم)
+            if (command === 'play' || command === 'p') {
+                if (!message.member.voice.channel) return message.reply('❌ يجب أن تكون في روم صوتي!');
+                
+                // التأكد أن البوت في نفس الروم أو يدخل إليه
+                if (!this.connection || this.currentChannelId !== message.member.voice.channel.id) {
+                    this.currentChannelId = message.member.voice.channel.id;
+                    this.joinChannel(this.currentChannelId, message.guild.id, message.guild.voiceAdapterCreator);
+                }
+
+                const query = args.join(' ');
+                if (!query) return message.reply('❌ يرجى كتابة اسم الأغنية أو الرابط!');
+
+                try {
+                    let stream;
+                    if (query.includes('youtube.com') || query.includes('youtu.be')) {
+                        stream = await play.stream(query);
+                    } else {
+                        const search = await play.search(query, { limit: 1 });
+                        if (search.length === 0) return message.reply('❌ لم يتم العثور على نتائج!');
+                        stream = await play.stream(search[0].url);
+                        message.channel.send(`🎶 جاري تشغيل: **${search[0].title}**`);
+                    }
+
+                    const resource = createAudioResource(stream.stream, { inputType: stream.type });
+                    this.player.play(resource);
+                } catch (err) {
+                    console.error(err);
+                    message.reply('❌ حدث خطأ أثناء محاولة تشغيل الموسيقى.');
+                }
             }
 
+            if (command === 'stop') {
+                this.player.stop();
+                message.reply('⏹️ تم إيقاف الموسيقى.');
+            }
+
+            if (command === 'status') {
+                message.reply(`🤖 **${this.config.name}** is online!`);
+            }
+
+            // أوامر البوت القائد
             if (this.isMaster) {
                 this.handleMasterCommands(message, command, args);
             }
         });
+
+        this.player.on('error', error => console.error(`[${this.config.name}] Player Error: ${error.message}`));
     }
 
     async handleMasterCommands(message, command, args) {
@@ -70,49 +104,39 @@ class MusicBot {
             const botIndex = parseInt(args[0]) - 1;
             const targetBot = allBots[botIndex];
             const channel = message.member.voice.channel;
-
-            if (!targetBot) return message.reply('❌ رقم البوت غير صحيح (1-7)');
-            if (!channel) return message.reply('❌ يجب أن تكون في روم صوتي لاستدعاء البوت!');
-
-            targetBot.currentChannelId = channel.id; // تحديث الروم المستهدف لإعادة الاتصال به مستقبلاً
-            targetBot.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
-            message.reply(`✅ تم استدعاء **${targetBot.config.name}** إلى **${channel.name}** وسيبقى هناك.`);
-        }
-
-        if (command === 'dismiss') {
-            const botIndex = parseInt(args[0]) - 1;
-            const targetBot = allBots[botIndex];
-
-            if (!targetBot) return message.reply('❌ رقم البوت غير صحيح');
-            
-            targetBot.currentChannelId = null; // مسح الروم المستهدف لمنع إعادة الاتصال التلقائي
-            if (targetBot.connection) {
-                targetBot.connection.destroy();
-                targetBot.connection = null;
-                message.reply(`👋 تم إخراج **${targetBot.config.name}** وإيقاف إعادة الاتصال التلقائي له.`);
+            if (targetBot && channel) {
+                targetBot.currentChannelId = channel.id;
+                targetBot.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
+                message.reply(`✅ تم استدعاء **${targetBot.config.name}**`);
             }
-        }
-
-        if (command === 'summonall') {
-            const channel = message.member.voice.channel;
-            if (!channel) return message.reply('❌ يجب أن تكون في روم صوتي!');
-
-            allBots.forEach(bot => {
-                bot.currentChannelId = channel.id;
-                bot.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
-            });
-            message.reply(`🚀 تم استدعاء جميع البوتات إلى **${channel.name}** مع تفعيل ميزة البقاء المتصل.`);
         }
 
         if (command === 'dismissall') {
             allBots.forEach(bot => {
                 bot.currentChannelId = null;
+                if (bot.connection) bot.connection.destroy();
+            });
+            message.reply('🧹 تم إخراج جميع البوتات.');
+        }
+        
+        // أمر لتشغيل موسيقى في كل البوتات دفعة واحدة (اختياري)
+        if (command === 'playall') {
+            const query = args.join(' ');
+            if (!query) return message.reply('❌ يرجى كتابة اسم الأغنية!');
+            message.reply(`🚀 جاري محاولة تشغيل الموسيقى في جميع البوتات المتصلة...`);
+            
+            allBots.forEach(async (bot) => {
                 if (bot.connection) {
-                    bot.connection.destroy();
-                    bot.connection = null;
+                    try {
+                        const search = await play.search(query, { limit: 1 });
+                        if (search.length > 0) {
+                            const stream = await play.stream(search[0].url);
+                            const resource = createAudioResource(stream.stream, { inputType: stream.type });
+                            bot.player.play(resource);
+                        }
+                    } catch (e) {}
                 }
             });
-            message.reply(`🧹 تم إخراج جميع البوتات وإيقاف ميزة إعادة الاتصال التلقائي.`);
         }
     }
 
@@ -122,49 +146,25 @@ class MusicBot {
                 const channel = await this.client.channels.fetch(this.currentChannelId);
                 if (channel && channel.isVoiceBased()) {
                     this.joinChannel(channel.id, channel.guild.id, channel.guild.voiceAdapterCreator);
-                    console.log(`[${this.config.name}] Successfully joined/reconnected to: ${channel.name}`);
                 }
-            } catch (err) {
-                console.error(`[${this.config.name}] Auto-join failed: ${err.message}`);
-            }
+            } catch (err) {}
         }
     }
 
     joinChannel(channelId, guildId, adapterCreator) {
-        if (this.connection) {
-            this.connection.destroy();
-        }
-
+        if (this.connection) this.connection.destroy();
         this.connection = joinVoiceChannel({
             channelId: channelId,
             guildId: guildId,
             adapterCreator: adapterCreator,
             selfDeaf: true
         });
-
-        this.connection.on(VoiceConnectionStatus.Disconnected, async () => {
-            try {
-                await Promise.race([
-                    entersState(this.connection, VoiceConnectionStatus.Signalling, 5_000),
-                    entersState(this.connection, VoiceConnectionStatus.Connecting, 5_000),
-                ]);
-            } catch (error) {
-                if (this.currentChannelId) {
-                    console.log(`[${this.config.name}] Connection lost. Attempting to reconnect...`);
-                    this.autoJoin();
-                }
-            }
-        });
-
         this.connection.subscribe(this.player);
     }
 
     login() {
-        const token = this.config.token;
-        if (token && token !== "TOKEN_X" && token.length > 10) {
-            this.client.login(token).catch(err => {
-                console.error(`[${this.config.name}] Login Failed: ${err.message}`);
-            });
+        if (this.config.token && this.config.token.length > 10) {
+            this.client.login(this.config.token).catch(() => {});
         }
     }
 }

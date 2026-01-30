@@ -1,0 +1,15 @@
+version: '3.8'
+
+services:
+  music-bots:
+    build: .
+    container_name: discord-music-bots
+    restart: always
+    volumes:
+      - ./config.json:/usr/src/app/config.json
+      - ./.env:/usr/src/app/.env
+    logging:
+      driver: "json-file"
+      options:
+        max-size: "10mb"
+        max-file: "3"
